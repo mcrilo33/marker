@@ -1,17 +1,10 @@
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from copy import deepcopy
 from typing import Annotated, List
-from collections import Counter
-from PIL import Image
 
 from ftfy import fix_text
-from surya.detection import DetectionPredictor, TextDetectionResult
-from surya.recognition import RecognitionPredictor, TextLine
-from surya.table_rec import TableRecPredictor
-from surya.table_rec.schema import TableResult, TableCell as SuryaTableCell
-from pdftext.extraction import table_output
-
+from marker.logger import get_logger
 from marker.processors import BaseProcessor
 from marker.schema import BlockTypes
 from marker.schema.blocks.tablecell import TableCell
@@ -20,7 +13,13 @@ from marker.schema.polygon import PolygonBox
 from marker.settings import settings
 from marker.util import matrix_intersection_area, unwrap_math
 from marker.utils.image import is_blank_image
-from marker.logger import get_logger
+from pdftext.extraction import table_output
+from PIL import Image
+from surya.detection import DetectionPredictor, TextDetectionResult
+from surya.recognition import RecognitionPredictor, TextLine
+from surya.table_rec import TableRecPredictor
+from surya.table_rec.schema import TableCell as SuryaTableCell
+from surya.table_rec.schema import TableResult
 
 logger = get_logger()
 
@@ -30,7 +29,7 @@ class TableProcessor(BaseProcessor):
     A processor for recognizing tables in the document.
     """
 
-    block_types = (BlockTypes.Table, BlockTypes.TableOfContents, BlockTypes.Form)
+    block_types = (BlockTypes.Table, BlockTypes.TableOfContents)
     table_rec_batch_size: Annotated[
         int,
         "The batch size to use for the table recognition model.",
@@ -118,9 +117,9 @@ class TableProcessor(BaseProcessor):
             [t["table_image"] for t in table_data],
             batch_size=self.get_table_rec_batch_size(),
         )
-        assert len(tables) == len(table_data), (
-            "Number of table results should match the number of tables"
-        )
+        assert len(tables) == len(
+            table_data
+        ), "Number of table results should match the number of tables"
 
         # Assign cell text if we don't need OCR
         # We do this at a line level
@@ -192,9 +191,9 @@ class TableProcessor(BaseProcessor):
             if not text or text == ".":
                 continue
             # Spaced sequences: ". . .", "- - -", "_ _ _", "… … …"
-            text = re.sub(r"(\s?[.\-_…]){2,}", "", text)
+            text = re.sub(r"(\s?[.\-_…]){2,}", "▁", text)
             # Unspaced sequences: "...", "---", "___", "……"
-            text = re.sub(r"[.\-_…]{2,}", "", text)
+            text = re.sub(r"[.\-_…]{2,}", "▁", text)
             # Remove mathbf formatting if there is only digits with decimals/commas/currency symbols inside
             text = re.sub(r"\\mathbf\{([0-9.,$€£]+)\}", r"<b>\1</b>", text)
             # Drop empty tags like \overline{}
@@ -475,9 +474,9 @@ class TableProcessor(BaseProcessor):
             page_range=unique_pages,
             workers=self.pdftext_workers,
         )
-        assert len(cell_text) == len(unique_pages), (
-            "Number of pages and table inputs must match"
-        )
+        assert len(cell_text) == len(
+            unique_pages
+        ), "Number of pages and table inputs must match"
 
         for pidx, (page_tables, pnum) in enumerate(zip(cell_text, unique_pages)):
             table_idx = 0
@@ -491,9 +490,9 @@ class TableProcessor(BaseProcessor):
                     else:
                         block["table_text_lines"] = page_tables[table_idx]
                     table_idx += 1
-            assert table_idx == len(page_tables), (
-                "Number of tables and table inputs must match"
-            )
+            assert table_idx == len(
+                page_tables
+            ), "Number of tables and table inputs must match"
 
     def align_table_cells(
         self, table: TableResult, table_detection_result: TextDetectionResult
@@ -587,9 +586,9 @@ class TableProcessor(BaseProcessor):
             images=[table_blocks[i]["table_image"] for i in ocr_idxs],
             batch_size=self.get_detection_batch_size(),
         )
-        assert len(detection_results) == len(ocr_idxs), (
-            "Every OCRed table requires a text detection result"
-        )
+        assert len(detection_results) == len(
+            ocr_idxs
+        ), "Every OCRed table requires a text detection result"
 
         for idx, table_detection_result in zip(ocr_idxs, detection_results):
             self.align_table_cells(tables[idx], table_detection_result)
@@ -673,9 +672,9 @@ class TableProcessor(BaseProcessor):
         det_images = [
             t["table_image"] for i, t in enumerate(table_blocks) if i in ocr_idxs
         ]
-        assert len(det_images) == len(ocr_polys), (
-            f"Number of detection images and OCR polygons must match: {len(det_images)} != {len(ocr_polys)}"
-        )
+        assert len(det_images) == len(
+            ocr_polys
+        ), f"Number of detection images and OCR polygons must match: {len(det_images)} != {len(ocr_polys)}"
         self.recognition_model.disable_tqdm = self.disable_tqdm
         ocr_results = self.get_ocr_results(table_images=det_images, ocr_polys=ocr_polys)
 
@@ -683,9 +682,9 @@ class TableProcessor(BaseProcessor):
             table_cells: List[SuryaTableCell] = result.cells
             cells_need_text = [tc for tc in table_cells if tc.text_lines is None]
 
-            assert len(cells_need_text) == len(ocr_res.text_lines), (
-                "Number of cells needing text and OCR results must match"
-            )
+            assert len(cells_need_text) == len(
+                ocr_res.text_lines
+            ), "Number of cells needing text and OCR results must match"
 
             for cell_text, cell_needs_text in zip(ocr_res.text_lines, cells_need_text):
                 # Don't need to correct back to image size

@@ -1,9 +1,7 @@
 from typing import Annotated, List
 
-from surya.layout import LayoutPredictor
-from surya.layout.schema import LayoutResult, LayoutBox
-
 from marker.builders import BaseBuilder
+from marker.logger import get_logger
 from marker.providers.pdf import PdfProvider
 from marker.schema import BlockTypes
 from marker.schema.document import Document
@@ -11,6 +9,10 @@ from marker.schema.groups.page import PageGroup
 from marker.schema.polygon import PolygonBox
 from marker.schema.registry import get_block_class
 from marker.settings import settings
+from surya.layout import LayoutPredictor
+from surya.layout.schema import LayoutBox, LayoutResult
+
+logger = get_logger()
 
 
 class LayoutBuilder(BaseBuilder):
@@ -54,7 +56,7 @@ class LayoutBuilder(BaseBuilder):
             layout_results = self.forced_layout(document.pages)
         else:
             layout_results = self.surya_layout(document.pages)
-        self.add_blocks_to_pages(document.pages, layout_results)
+        self.add_blocks_to_pages(document, provider, document.pages, layout_results)
         self.expand_layout_blocks(document)
 
     def get_batch_size(self):
@@ -128,8 +130,48 @@ class LayoutBuilder(BaseBuilder):
                         min(self.max_expand_frac, y_expand_frac),
                     ).fit_to_bounds((0, 0, *page_size))
 
+    def _get_text_from_provider(
+        self, provider: PdfProvider, page_id: int, block_polygon: PolygonBox
+    ) -> str:
+        """
+        Extract text from provider lines that intersect with the block's bbox.
+
+        Args:
+            provider: PdfProvider instance with page_lines
+            page_id: Page ID to get lines from
+            block_polygon: PolygonBox of the block
+
+        Returns:
+            Extracted text from intersecting lines
+        """
+        try:
+            provider_lines = provider.get_page_lines(page_id)
+            if not provider_lines:
+                return ""
+
+            text_parts = []
+            for provider_line in provider_lines:
+                line_polygon = provider_line.line.polygon
+                # Check if line intersects with block (using intersection percentage)
+                intersection_pct = block_polygon.intersection_pct(line_polygon)
+                if intersection_pct > 0:
+                    # Extract text from spans
+                    line_text = " ".join(
+                        span.text for span in provider_line.spans if span.text
+                    )
+                    if line_text.strip():
+                        text_parts.append(line_text.strip())
+
+            return " ".join(text_parts)
+        except Exception as e:
+            return f"<error extracting from provider: {e}>"
+
     def add_blocks_to_pages(
-        self, pages: List[PageGroup], layout_results: List[LayoutResult]
+        self,
+        document: Document,
+        provider: PdfProvider,
+        pages: List[PageGroup],
+        layout_results: List[LayoutResult],
     ):
         for page, layout_result in zip(pages, layout_results):
             layout_page_size = PolygonBox.from_bbox(layout_result.image_bbox).size
@@ -137,6 +179,16 @@ class LayoutBuilder(BaseBuilder):
             page.layout_sliced = (
                 layout_result.sliced
             )  # This indicates if the page was sliced by the layout model
+
+            # DEBUG: Log total bbox count before processing
+            total_bboxes = len(layout_result.bboxes)
+            logger.debug(f"[BLOCK DEBUG] ===== PAGE {page.page_id} =====")
+            logger.debug(
+                f"[BLOCK DEBUG] Total bboxes from Surya layout: {total_bboxes}"
+            )
+            logger.debug(f"[BLOCK DEBUG] Page sliced: {layout_result.sliced}")
+
+            created_block_ids = []
             for bbox in sorted(layout_result.bboxes, key=lambda x: x.position):
                 block_cls = get_block_class(BlockTypes[bbox.label])
                 layout_block = page.add_block(
@@ -147,10 +199,58 @@ class LayoutBuilder(BaseBuilder):
                 ).fit_to_bounds((0, 0, *provider_page_size))
                 layout_block.top_k = {
                     BlockTypes[label]: prob
-                    for (label, prob) in bbox.top_k.items()
+                    for (label, prob) in (bbox.top_k.items() if bbox.top_k else [])
                     if label in BlockTypes.__members__
                 }
+
+                # DEBUG: Log all block information
+                all_labels_preds = {}
+                if bbox.top_k:
+                    all_labels_preds = {
+                        label: float(prob) for (label, prob) in bbox.top_k.items()
+                    }
+
+                # Try to get text content from multiple sources
+                text_content = ""
+                # First try: raw_text from block (may be empty at this stage)
+                try:
+                    text_content = layout_block.raw_text(document)
+                except Exception:
+                    pass
+
+                # Second try: extract from provider lines if raw_text is empty
+                if (
+                    not text_content or text_content.strip() == ""
+                ) and page.page_id is not None:
+                    text_content = self._get_text_from_provider(
+                        provider, page.page_id, layout_block.polygon
+                    )
+
+                logger.debug("[BLOCK DEBUG] ===== BLOCK CREATED =====")
+                logger.debug(
+                    f"[BLOCK DEBUG] Block id={layout_block.id}, page={page.page_id}"
+                )
+                logger.debug(f"[BLOCK DEBUG]   - bbox: {layout_block.polygon.bbox}")
+                logger.debug(f"[BLOCK DEBUG]   - label: {bbox.label}")
+                logger.debug(f"[BLOCK DEBUG]   - text_content:\n'{text_content}'\n\n")
+                logger.debug(
+                    f"[BLOCK DEBUG]   - all_labels_preds (from Surya): {all_labels_preds}"
+                )
+
+                created_block_ids.append(layout_block.id)
                 page.add_structure(layout_block)
+
+            # DEBUG: Log summary after processing all blocks for this page
+            logger.debug(f"[BLOCK DEBUG] ===== PAGE {page.page_id} SUMMARY =====")
+            logger.debug(f"[BLOCK DEBUG] Total bboxes from Surya: {total_bboxes}")
+            logger.debug(
+                f"[BLOCK DEBUG] Total blocks created: {len(created_block_ids)}"
+            )
+            logger.debug(f"[BLOCK DEBUG] Created block IDs: {created_block_ids}")
+            if total_bboxes != len(created_block_ids):
+                logger.warning(
+                    f"[BLOCK DEBUG] WARNING: Mismatch! {total_bboxes} bboxes from Surya but {len(created_block_ids)} blocks created"
+                )
 
             # Ensure page has non-empty structure
             if page.structure is None:

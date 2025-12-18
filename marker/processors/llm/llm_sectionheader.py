@@ -1,8 +1,6 @@
 import json
 from typing import List, Tuple
 
-from tqdm import tqdm
-
 from marker.logger import get_logger
 from marker.processors.llm import BaseLLMComplexBlockProcessor
 from marker.schema import BlockTypes
@@ -10,6 +8,7 @@ from marker.schema.blocks import Block
 from marker.schema.document import Document
 from marker.schema.groups import PageGroup
 from pydantic import BaseModel
+from tqdm import tqdm
 
 logger = get_logger()
 
@@ -36,15 +35,25 @@ Your goal is to make sure that the section headers have the correct levels (h1, 
 
 Guidelines:
 - Edit the blocks to ensure that the section headers have the correct levels.
+- **Pattern Recognition**: Headers with similar formatting patterns should be at the same level. Look for:
+  - **Formatting consistency**: Headers with the same HTML formatting (e.g., all using `<b>` tags, all using `**` bold markdown, all using `<i>` italics) should typically be grouped together.
+  - **Symbol patterns**: Headers with similar symbols (→, *, •, -, etc.) should be at the same level.
+  - **Content patterns**: Headers with similar content structure (dates, numbering, prefixes) should have consistent levels.
+  - **Visual consistency**: Headers that appear visually similar in the document should be grouped hierarchically.
+- **Semantic grouping**: Headers that serve the same structural purpose (e.g., all date-based timeline entries, all numbered subsections) should have consistent levels, **regardless of symbol differences**. This is the most important criterion - prioritize semantic purpose over symbol matching.
+- **Document structure**: Headers that are clearly subsections of a main topic should be one level deeper than their parent.
 - Only edit the h1, h2, h3, h4, h5, and h6 tags.  Do not change any other tags or content in the headers.
 - Only output the headers that changed (if nothing changed, output nothing).
 - Every header you output needs to have one and only one level tag (h1, h2, h3, h4, h5, or h6).
 
 **Instructions:**
 1. Carefully examine the provided section headers and JSON.
-2. Identify any changes you'll need to make, and write a short analysis.
-3. Output "no_corrections", or "corrections_needed", depending on whether you need to make changes.
-4. If corrections are needed, output any blocks that need updates.  Only output the block ids and html, like this:
+2. **Identify patterns**: Look for headers with similar formatting (HTML tags, markdown, symbols), content structure (dates, numbering), and visual appearance.
+3. **Group similar headers**: Headers with similar patterns should typically be at the same level.
+4. **Check consistency**: Ensure headers that serve the same structural purpose have consistent levels. This takes precedence over symbol differences.
+5. Identify any changes you'll need to make, and write a short analysis explaining the patterns you identified.
+6. Output "no_corrections", or "corrections_needed", depending on whether you need to make changes.
+7. If corrections are needed, output any blocks that need updates.  Only output the block ids and html, like this:
         ```json
         [
             {
@@ -55,7 +64,7 @@ Guidelines:
         ]
         ```
 
-**Example:**
+**Example 1 - Numbering Pattern:**
 Input:
 Section Headers
 ```json
@@ -75,7 +84,7 @@ Section Headers
 ]
 ```
 Output:
-Analysis: The first section header is missing the h1 tag, and the second section header is missing the h2 tag.
+Analysis: The first section header is missing the h1 tag, and the second section header is missing the h2 tag. The numbering pattern (1 vs 1.1) indicates a hierarchical relationship.
 ```json
 [
     {
@@ -85,6 +94,44 @@ Analysis: The first section header is missing the h1 tag, and the second section
     {
         "id": "/page/0/SectionHeader/2",
         "html": "<h2>1.1 Vector Addition</h2>"
+    }
+]
+```
+
+**Example 2 - Formatting Pattern Recognition with Symbol Variations:**
+Input:
+Section Headers
+```json
+[
+    {
+        "id": "/page/0/SectionHeader/1",
+        "html": "<h3><b>→ Le 5 mai</b></h3>",
+        "page": 0
+    },
+    {
+        "id": "/page/0/SectionHeader/2",
+        "html": "<h2><b>→ 20 juin</b></h2>",
+        "page": 0
+    },
+    {
+        "id": "/page/0/SectionHeader/3",
+        "html": "<h2><b>* Dans la nuit du 4 août</b></h2>",
+        "page": 0
+    },
+    {
+        "id": "/page/0/SectionHeader/4",
+        "html": "<h2><b>* Le 26 août</b></h2>",
+        "page": 0
+    }
+]
+```
+Output:
+Analysis: All four headers share the same formatting pattern (bold text with `<b>` tags) and are date-based timeline entries. Even though some use → and others use *, they all serve the same structural purpose (chronological timeline entries) and should be at the same level. The first header is incorrectly at h3 while the others are h2. They should all be h2 for consistency. **Key point**: Different symbols (→ vs *) do not necessarily indicate different header levels when the headers serve the same semantic purpose.
+```json
+[
+    {
+        "id": "/page/0/SectionHeader/1",
+        "html": "<h2><b>→ Le 5 mai</b></h2>"
     }
 ]
 ```
