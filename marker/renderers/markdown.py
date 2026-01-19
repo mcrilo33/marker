@@ -413,7 +413,7 @@ class MarkdownRenderer(HTMLRenderer):
         )
 
         # Normalize sequences of dots to fixed line width (fill-in-the-blank fields)
-        FILL_IN_BLANK_WIDTH = 150  # Standard width for fill-in-the-blank fields
+        FILL_IN_BLANK_WIDTH = 142  # Standard width for fill-in-the-blank fields
         markdown = re.sub(
             r"(\. ?){130,}",
             lambda m: "\n\n" + "." * FILL_IN_BLANK_WIDTH + "\n\n",
